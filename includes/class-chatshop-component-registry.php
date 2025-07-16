@@ -1,497 +1,559 @@
 <?php
-/**
- * Payment Gateway Registry
- *
- * @package ChatShop
- * @subpackage Components/Payment
- * @since 1.0.0
- */
-
-namespace ChatShop\Components\Payment;
-
-use ChatShop\Includes\ChatShop_Logger;
-
-// Prevent direct access
-defined('ABSPATH') || exit;
 
 /**
- * Payment Gateway Registry Class
+ * Component Registry Class
  *
- * Manages registration and discovery of payment gateways
+ * Manages registration and access to all plugin components
  *
- * @since 1.0.0
+ * @package    ChatShop
+ * @subpackage ChatShop/includes
+ * @since      1.0.0
  */
-class ChatShop_Payment_Registry {
-    
+
+// Exit if accessed directly
+if (! defined('ABSPATH')) {
+    exit;
+}
+
+/**
+ * Component Registry Class
+ *
+ * This class maintains a registry of all active components
+ * and provides methods to access them throughout the plugin.
+ *
+ * @since      1.0.0
+ * @package    ChatShop
+ * @subpackage ChatShop/includes
+ */
+class ChatShop_Component_Registry
+{
+
     /**
-     * Singleton instance
+     * The single instance of the class
      *
-     * @var ChatShop_Payment_Registry
+     * @var ChatShop_Component_Registry
+     * @since 1.0.0
      */
-    private static $instance = null;
-    
+    protected static $_instance = null;
+
     /**
-     * Registered gateways
+     * Registered components
      *
      * @var array
+     * @since 1.0.0
      */
-    private $gateways = array();
-    
+    private $components = array();
+
     /**
-     * Gateway capabilities index
+     * Component metadata
      *
      * @var array
+     * @since 1.0.0
      */
-    private $capabilities_index = array();
-    
+    private $component_metadata = array();
+
     /**
-     * Currency support index
+     * Component dependencies
      *
      * @var array
+     * @since 1.0.0
      */
-    private $currency_index = array();
-    
+    private $dependencies = array();
+
     /**
-     * Logger instance
+     * Component status
      *
-     * @var ChatShop_Logger
+     * @var array
+     * @since 1.0.0
      */
-    private $logger;
-    
+    private $component_status = array();
+
     /**
-     * Private constructor
+     * Main instance
+     *
+     * @return ChatShop_Component_Registry
      */
-    private function __construct() {
-        $this->logger = new ChatShop_Logger();
+    public static function instance()
+    {
+        if (is_null(self::$_instance)) {
+            self::$_instance = new self();
+        }
+        return self::$_instance;
+    }
+
+    /**
+     * Constructor
+     */
+    private function __construct()
+    {
         $this->init();
     }
-    
+
     /**
-     * Get singleton instance
-     *
-     * @return ChatShop_Payment_Registry
+     * Initialize the registry
      */
-    public static function get_instance() {
-        if (null === self::$instance) {
-            self::$instance = new self();
+    private function init()
+    {
+        // Set up default component metadata
+        $this->setup_default_metadata();
+
+        // Load component configurations
+        $this->load_component_configs();
+
+        // Initialize hooks
+        $this->init_hooks();
+    }
+
+    /**
+     * Initialize hooks
+     */
+    private function init_hooks()
+    {
+        add_action('chatshop_register_components', array($this, 'register_core_components'), 5);
+        add_filter('chatshop_component_enabled', array($this, 'filter_component_enabled'), 10, 2);
+    }
+
+    /**
+     * Register a component
+     *
+     * @param string $component_id Unique component identifier
+     * @param object $component Component instance
+     * @param array $metadata Optional component metadata
+     * @return bool
+     */
+    public function register($component_id, $component, $metadata = array())
+    {
+        // Validate component
+        if (! $this->validate_component($component)) {
+            ChatShop_Logger::log('error', 'Invalid component registration attempt: ' . $component_id);
+            return false;
         }
-        return self::$instance;
+
+        // Check if already registered
+        if ($this->is_registered($component_id)) {
+            ChatShop_Logger::log('warning', 'Component already registered: ' . $component_id);
+            return false;
+        }
+
+        // Check dependencies
+        if (! $this->check_dependencies($component_id, $metadata)) {
+            ChatShop_Logger::log('error', 'Component dependencies not met: ' . $component_id);
+            return false;
+        }
+
+        // Register the component
+        $this->components[$component_id] = $component;
+        $this->component_metadata[$component_id] = wp_parse_args($metadata, $this->get_default_metadata());
+        $this->component_status[$component_id] = 'active';
+
+        // Initialize component if it has an init method
+        if (method_exists($component, 'init')) {
+            $component->init();
+        }
+
+        // Fire registration hook
+        do_action('chatshop_component_registered', $component_id, $component);
+
+        ChatShop_Logger::log('info', 'Component registered successfully: ' . $component_id);
+        return true;
     }
-    
+
     /**
-     * Initialize registry
+     * Unregister a component
      *
-     * @return void
+     * @param string $component_id Component ID
+     * @return bool
      */
-    private function init() {
-        // Register core gateways
-        add_action('init', array($this, 'register_core_gateways'), 5);
-        
-        // Allow third-party gateway registration
-        add_action('chatshop_register_payment_gateways', array($this, 'register_third_party_gateways'), 10);
-        
-        // Build indexes after registration
-        add_action('init', array($this, 'build_indexes'), 20);
+    public function unregister($component_id)
+    {
+        if (! $this->is_registered($component_id)) {
+            return false;
+        }
+
+        // Check if other components depend on this one
+        if ($this->has_dependents($component_id)) {
+            ChatShop_Logger::log('error', 'Cannot unregister component with dependents: ' . $component_id);
+            return false;
+        }
+
+        // Call cleanup method if exists
+        $component = $this->get($component_id);
+        if ($component && method_exists($component, 'cleanup')) {
+            $component->cleanup();
+        }
+
+        // Remove from registry
+        unset($this->components[$component_id]);
+        unset($this->component_metadata[$component_id]);
+        unset($this->component_status[$component_id]);
+
+        // Fire unregistration hook
+        do_action('chatshop_component_unregistered', $component_id);
+
+        return true;
     }
-    
+
     /**
-     * Register a payment gateway
+     * Get a component
      *
-     * @param string $gateway_id    Gateway identifier
-     * @param array  $gateway_info  Gateway information
-     * @return bool                 Success status
+     * @param string $component_id Component ID
+     * @return object|null
      */
-    public function register_gateway($gateway_id, $gateway_info) {
-        // Validate required fields
-        $required_fields = array('class', 'name', 'supported_currencies', 'supported_features');
-        
-        foreach ($required_fields as $field) {
-            if (!isset($gateway_info[$field])) {
-                $this->logger->log(
-                    sprintf('Gateway registration failed - missing field: %s', $field),
-                    'error',
-                    'payment',
-                    array('gateway_id' => $gateway_id)
-                );
+    public function get($component_id)
+    {
+        return isset($this->components[$component_id]) ? $this->components[$component_id] : null;
+    }
+
+    /**
+     * Get all components
+     *
+     * @return array
+     */
+    public function get_all()
+    {
+        return $this->components;
+    }
+
+    /**
+     * Get components by type
+     *
+     * @param string $type Component type
+     * @return array
+     */
+    public function get_by_type($type)
+    {
+        $components = array();
+
+        foreach ($this->component_metadata as $id => $metadata) {
+            if (isset($metadata['type']) && $metadata['type'] === $type) {
+                $components[$id] = $this->components[$id];
+            }
+        }
+
+        return $components;
+    }
+
+    /**
+     * Check if component is registered
+     *
+     * @param string $component_id Component ID
+     * @return bool
+     */
+    public function is_registered($component_id)
+    {
+        return isset($this->components[$component_id]);
+    }
+
+    /**
+     * Get component metadata
+     *
+     * @param string $component_id Component ID
+     * @return array|null
+     */
+    public function get_metadata($component_id)
+    {
+        return isset($this->component_metadata[$component_id]) ? $this->component_metadata[$component_id] : null;
+    }
+
+    /**
+     * Update component metadata
+     *
+     * @param string $component_id Component ID
+     * @param array $metadata New metadata
+     * @return bool
+     */
+    public function update_metadata($component_id, $metadata)
+    {
+        if (! $this->is_registered($component_id)) {
+            return false;
+        }
+
+        $this->component_metadata[$component_id] = wp_parse_args($metadata, $this->component_metadata[$component_id]);
+        return true;
+    }
+
+    /**
+     * Get component status
+     *
+     * @param string $component_id Component ID
+     * @return string|null
+     */
+    public function get_status($component_id)
+    {
+        return isset($this->component_status[$component_id]) ? $this->component_status[$component_id] : null;
+    }
+
+    /**
+     * Set component status
+     *
+     * @param string $component_id Component ID
+     * @param string $status New status
+     * @return bool
+     */
+    public function set_status($component_id, $status)
+    {
+        if (! $this->is_registered($component_id)) {
+            return false;
+        }
+
+        $allowed_statuses = array('active', 'inactive', 'error', 'loading');
+        if (! in_array($status, $allowed_statuses, true)) {
+            return false;
+        }
+
+        $old_status = $this->component_status[$component_id];
+        $this->component_status[$component_id] = $status;
+
+        // Fire status change hook
+        do_action('chatshop_component_status_changed', $component_id, $status, $old_status);
+
+        return true;
+    }
+
+    /**
+     * Enable a component
+     *
+     * @param string $component_id Component ID
+     * @return bool
+     */
+    public function enable($component_id)
+    {
+        if (! $this->is_registered($component_id)) {
+            return false;
+        }
+
+        $component = $this->get($component_id);
+        if ($component && method_exists($component, 'enable')) {
+            $component->enable();
+        }
+
+        return $this->set_status($component_id, 'active');
+    }
+
+    /**
+     * Disable a component
+     *
+     * @param string $component_id Component ID
+     * @return bool
+     */
+    public function disable($component_id)
+    {
+        if (! $this->is_registered($component_id)) {
+            return false;
+        }
+
+        $component = $this->get($component_id);
+        if ($component && method_exists($component, 'disable')) {
+            $component->disable();
+        }
+
+        return $this->set_status($component_id, 'inactive');
+    }
+
+    /**
+     * Validate component
+     *
+     * @param object $component Component to validate
+     * @return bool
+     */
+    private function validate_component($component)
+    {
+        // Check if it's an object
+        if (! is_object($component)) {
+            return false;
+        }
+
+        // Check if it implements the base component interface
+        if (! ($component instanceof ChatShop_Component)) {
+            // Allow components that don't extend the base class but have required methods
+            $required_methods = array('get_id', 'get_name');
+            foreach ($required_methods as $method) {
+                if (! method_exists($component, $method)) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Check component dependencies
+     *
+     * @param string $component_id Component ID
+     * @param array $metadata Component metadata
+     * @return bool
+     */
+    private function check_dependencies($component_id, $metadata)
+    {
+        if (! isset($metadata['dependencies']) || empty($metadata['dependencies'])) {
+            return true;
+        }
+
+        foreach ($metadata['dependencies'] as $dependency) {
+            if (! $this->is_registered($dependency)) {
+                return false;
+            }
+
+            // Check if dependency is active
+            if ($this->get_status($dependency) !== 'active') {
                 return false;
             }
         }
-        
-        // Sanitize gateway ID
-        $gateway_id = sanitize_key($gateway_id);
-        
-        // Check for duplicates
-        if (isset($this->gateways[$gateway_id])) {
-            $this->logger->log(
-                sprintf('Gateway already registered: %s', $gateway_id),
-                'warning',
-                'payment'
-            );
-            return false;
-        }
-        
-        // Register gateway
-        $this->gateways[$gateway_id] = array(
-            'id'                    => $gateway_id,
-            'class'                 => $gateway_info['class'],
-            'name'                  => sanitize_text_field($gateway_info['name']),
-            'description'           => isset($gateway_info['description']) 
-                                      ? sanitize_text_field($gateway_info['description']) 
-                                      : '',
-            'supported_currencies'  => (array) $gateway_info['supported_currencies'],
-            'supported_features'    => (array) $gateway_info['supported_features'],
-            'icon'                  => isset($gateway_info['icon']) 
-                                      ? esc_url_raw($gateway_info['icon']) 
-                                      : '',
-            'priority'              => isset($gateway_info['priority']) 
-                                      ? absint($gateway_info['priority']) 
-                                      : 10,
-            'enabled'               => isset($gateway_info['enabled']) 
-                                      ? (bool) $gateway_info['enabled'] 
-                                      : true,
-        );
-        
-        $this->logger->log(
-            sprintf('Gateway registered: %s', $gateway_id),
-            'info',
-            'payment'
-        );
-        
+
+        // Store dependencies for later reference
+        $this->dependencies[$component_id] = $metadata['dependencies'];
+
         return true;
     }
-    
+
     /**
-     * Unregister a payment gateway
+     * Check if component has dependents
      *
-     * @param string $gateway_id Gateway identifier
-     * @return bool             Success status
-     */
-    public function unregister_gateway($gateway_id) {
-        if (!isset($this->gateways[$gateway_id])) {
-            return false;
-        }
-        
-        unset($this->gateways[$gateway_id]);
-        
-        // Rebuild indexes
-        $this->build_indexes();
-        
-        $this->logger->log(
-            sprintf('Gateway unregistered: %s', $gateway_id),
-            'info',
-            'payment'
-        );
-        
-        return true;
-    }
-    
-    /**
-     * Get gateway class name
-     *
-     * @param string $gateway_id Gateway identifier
-     * @return string|null      Class name or null if not found
-     */
-    public function get_gateway_class($gateway_id) {
-        return isset($this->gateways[$gateway_id]['class']) 
-            ? $this->gateways[$gateway_id]['class'] 
-            : null;
-    }
-    
-    /**
-     * Get gateway information
-     *
-     * @param string $gateway_id Gateway identifier
-     * @return array|null       Gateway info or null if not found
-     */
-    public function get_gateway_info($gateway_id) {
-        return isset($this->gateways[$gateway_id]) 
-            ? $this->gateways[$gateway_id] 
-            : null;
-    }
-    
-    /**
-     * Get all registered gateways
-     *
-     * @return array All registered gateways
-     */
-    public function get_all_gateways() {
-        // Sort by priority
-        uasort($this->gateways, function($a, $b) {
-            return $a['priority'] - $b['priority'];
-        });
-        
-        return $this->gateways;
-    }
-    
-    /**
-     * Get enabled gateways
-     *
-     * @return array Enabled gateways
-     */
-    public function get_enabled_gateways() {
-        return array_filter($this->gateways, function($gateway) {
-            return isset($gateway['enabled']) && $gateway['enabled'];
-        });
-    }
-    
-    /**
-     * Get gateways by capability
-     *
-     * @param string $capability Required capability
-     * @return array            Gateways supporting the capability
-     */
-    public function get_gateways_by_capability($capability) {
-        return isset($this->capabilities_index[$capability]) 
-            ? $this->capabilities_index[$capability] 
-            : array();
-    }
-    
-    /**
-     * Get gateways by currency
-     *
-     * @param string $currency Currency code
-     * @return array          Gateways supporting the currency
-     */
-    public function get_gateways_by_currency($currency) {
-        $currency = strtoupper($currency);
-        return isset($this->currency_index[$currency]) 
-            ? $this->currency_index[$currency] 
-            : array();
-    }
-    
-    /**
-     * Check if gateway exists
-     *
-     * @param string $gateway_id Gateway identifier
+     * @param string $component_id Component ID
      * @return bool
      */
-    public function gateway_exists($gateway_id) {
-        return isset($this->gateways[$gateway_id]);
-    }
-    
-    /**
-     * Register core gateways
-     *
-     * @return void
-     */
-    public function register_core_gateways() {
-        // Paystack Gateway
-        $this->register_gateway('paystack', array(
-            'class'                 => 'ChatShop\Components\Payment\Gateways\Paystack\ChatShop_Paystack_Gateway',
-            'name'                  => __('Paystack', 'chatshop'),
-            'description'           => __('Accept payments via Paystack', 'chatshop'),
-            'supported_currencies'  => array('NGN', 'GHS', 'ZAR', 'USD'),
-            'supported_features'    => array(
-                'products',
-                'refunds',
-                'payment_links',
-                'recurring',
-                'webhooks',
-                'payment_verification',
-                'split_payments',
-                'subaccounts',
-            ),
-            'icon'                  => CHATSHOP_PLUGIN_URL . 'assets/icons/paystack.svg',
-            'priority'              => 5,
-        ));
-        
-        // PayPal Gateway
-        $this->register_gateway('paypal', array(
-            'class'                 => 'ChatShop\Components\Payment\Gateways\PayPal\ChatShop_PayPal_Gateway',
-            'name'                  => __('PayPal', 'chatshop'),
-            'description'           => __('Accept payments via PayPal', 'chatshop'),
-            'supported_currencies'  => array('USD', 'EUR', 'GBP', 'CAD', 'AUD', 'JPY'),
-            'supported_features'    => array(
-                'products',
-                'refunds',
-                'payment_links',
-                'recurring',
-                'webhooks',
-                'payment_verification',
-                'express_checkout',
-            ),
-            'icon'                  => CHATSHOP_PLUGIN_URL . 'assets/icons/paypal.svg',
-            'priority'              => 10,
-        ));
-        
-        // Flutterwave Gateway
-        $this->register_gateway('flutterwave', array(
-            'class'                 => 'ChatShop\Components\Payment\Gateways\Flutterwave\ChatShop_Flutterwave_Gateway',
-            'name'                  => __('Flutterwave', 'chatshop'),
-            'description'           => __('Accept payments via Flutterwave', 'chatshop'),
-            'supported_currencies'  => array('NGN', 'USD', 'GBP', 'EUR', 'GHS', 'KES', 'UGX', 'TZS', 'ZAR'),
-            'supported_features'    => array(
-                'products',
-                'refunds',
-                'payment_links',
-                'recurring',
-                'webhooks',
-                'payment_verification',
-                'split_payments',
-                'subaccounts',
-            ),
-            'icon'                  => CHATSHOP_PLUGIN_URL . 'assets/icons/flutterwave.svg',
-            'priority'              => 15,
-        ));
-        
-        // Razorpay Gateway
-        $this->register_gateway('razorpay', array(
-            'class'                 => 'ChatShop\Components\Payment\Gateways\Razorpay\ChatShop_Razorpay_Gateway',
-            'name'                  => __('Razorpay', 'chatshop'),
-            'description'           => __('Accept payments via Razorpay', 'chatshop'),
-            'supported_currencies'  => array('INR', 'USD', 'EUR', 'GBP', 'SGD', 'AED'),
-            'supported_features'    => array(
-                'products',
-                'refunds',
-                'payment_links',
-                'recurring',
-                'webhooks',
-                'payment_verification',
-                'smart_collect',
-            ),
-            'icon'                  => CHATSHOP_PLUGIN_URL . 'assets/icons/razorpay.svg',
-            'priority'              => 20,
-        ));
-        
-        do_action('chatshop_core_gateways_registered', $this);
-    }
-    
-    /**
-     * Register third-party gateways
-     *
-     * @return void
-     */
-    public function register_third_party_gateways() {
-        // This method is called by the action hook to allow
-        // third-party developers to register their gateways
-        do_action('chatshop_register_gateways', $this);
-    }
-    
-    /**
-     * Build capability and currency indexes
-     *
-     * @return void
-     */
-    public function build_indexes() {
-        $this->capabilities_index = array();
-        $this->currency_index = array();
-        
-        foreach ($this->gateways as $gateway_id => $gateway_info) {
-            // Build capabilities index
-            foreach ($gateway_info['supported_features'] as $feature) {
-                if (!isset($this->capabilities_index[$feature])) {
-                    $this->capabilities_index[$feature] = array();
-                }
-                $this->capabilities_index[$feature][$gateway_id] = $gateway_info;
-            }
-            
-            // Build currency index
-            foreach ($gateway_info['supported_currencies'] as $currency) {
-                $currency = strtoupper($currency);
-                if (!isset($this->currency_index[$currency])) {
-                    $this->currency_index[$currency] = array();
-                }
-                $this->currency_index[$currency][$gateway_id] = $gateway_info;
+    private function has_dependents($component_id)
+    {
+        foreach ($this->dependencies as $id => $deps) {
+            if (in_array($component_id, $deps, true)) {
+                return true;
             }
         }
-        
-        $this->logger->log(
-            'Gateway indexes built',
-            'debug',
-            'payment',
-            array(
-                'total_gateways' => count($this->gateways),
-                'capabilities'   => count($this->capabilities_index),
-                'currencies'     => count($this->currency_index),
-            )
+        return false;
+    }
+
+    /**
+     * Setup default metadata
+     */
+    private function setup_default_metadata()
+    {
+        $this->default_metadata = array(
+            'version' => '1.0.0',
+            'author' => 'ChatShop',
+            'description' => '',
+            'type' => 'general',
+            'dependencies' => array(),
+            'settings' => array(),
+            'capabilities' => array(),
         );
     }
-    
+
     /**
-     * Get gateway priority
+     * Get default metadata
      *
-     * @param string $gateway_id Gateway identifier
-     * @return int              Priority value
+     * @return array
      */
-    public function get_gateway_priority($gateway_id) {
-        return isset($this->gateways[$gateway_id]['priority']) 
-            ? $this->gateways[$gateway_id]['priority'] 
-            : 10;
+    private function get_default_metadata()
+    {
+        return $this->default_metadata;
     }
-    
+
     /**
-     * Update gateway settings
-     *
-     * @param string $gateway_id Gateway identifier
-     * @param array  $settings   New settings
-     * @return bool             Success status
+     * Load component configurations
      */
-    public function update_gateway_settings($gateway_id, $settings) {
-        if (!isset($this->gateways[$gateway_id])) {
+    private function load_component_configs()
+    {
+        $configs = get_option('chatshop_component_configs', array());
+
+        foreach ($configs as $component_id => $config) {
+            if (isset($config['enabled']) && ! $config['enabled']) {
+                $this->component_status[$component_id] = 'inactive';
+            }
+        }
+    }
+
+    /**
+     * Register core components
+     */
+    public function register_core_components()
+    {
+        // This method will be called by the component loader
+        // to register core components
+    }
+
+    /**
+     * Filter component enabled status
+     *
+     * @param bool $enabled Current enabled status
+     * @param string $component_id Component ID
+     * @return bool
+     */
+    public function filter_component_enabled($enabled, $component_id)
+    {
+        // Check if component is in inactive status
+        if (isset($this->component_status[$component_id]) && $this->component_status[$component_id] === 'inactive') {
             return false;
         }
-        
-        // Update enabled status if provided
-        if (isset($settings['enabled'])) {
-            $this->gateways[$gateway_id]['enabled'] = (bool) $settings['enabled'];
-        }
-        
-        // Update priority if provided
-        if (isset($settings['priority'])) {
-            $this->gateways[$gateway_id]['priority'] = absint($settings['priority']);
-        }
-        
-        // Rebuild indexes after update
-        $this->build_indexes();
-        
-        $this->logger->log(
-            sprintf('Gateway settings updated: %s', $gateway_id),
-            'info',
-            'payment'
-        );
-        
-        return true;
+
+        return $enabled;
     }
-    
+
+    /**
+     * Get component dependencies
+     *
+     * @param string $component_id Component ID
+     * @return array
+     */
+    public function get_dependencies($component_id)
+    {
+        return isset($this->dependencies[$component_id]) ? $this->dependencies[$component_id] : array();
+    }
+
+    /**
+     * Get all component statuses
+     *
+     * @return array
+     */
+    public function get_all_statuses()
+    {
+        return $this->component_status;
+    }
+
     /**
      * Export registry data
      *
-     * @return array Registry data for export
+     * @return array
      */
-    public function export_data() {
+    public function export()
+    {
         return array(
-            'gateways'           => $this->gateways,
-            'capabilities_index' => $this->capabilities_index,
-            'currency_index'     => $this->currency_index,
-            'timestamp'          => current_time('timestamp'),
+            'components' => array_keys($this->components),
+            'metadata' => $this->component_metadata,
+            'status' => $this->component_status,
+            'dependencies' => $this->dependencies,
         );
     }
-    
+
     /**
-     * Import registry data
+     * Get component statistics
      *
-     * @param array $data Registry data to import
-     * @return bool      Success status
+     * @return array
      */
-    public function import_data($data) {
-        if (!isset($data['gateways']) || !is_array($data['gateways'])) {
-            return false;
+    public function get_statistics()
+    {
+        $stats = array(
+            'total' => count($this->components),
+            'active' => 0,
+            'inactive' => 0,
+            'error' => 0,
+            'by_type' => array(),
+        );
+
+        foreach ($this->component_status as $status) {
+            if (isset($stats[$status])) {
+                $stats[$status]++;
+            }
         }
-        
-        $this->gateways = $data['gateways'];
-        $this->build_indexes();
-        
-        return true;
+
+        foreach ($this->component_metadata as $metadata) {
+            $type = isset($metadata['type']) ? $metadata['type'] : 'general';
+            if (! isset($stats['by_type'][$type])) {
+                $stats['by_type'][$type] = 0;
+            }
+            $stats['by_type'][$type]++;
+        }
+
+        return $stats;
     }
-    
-    /**
-     * Prevent cloning
-     */
-    private function __clone() {}
-    
-    /**
-     * Prevent unserialization
-     */
-    public function __wakeup() {
-        throw new \Exception('Cannot unserialize singleton');
-    }
+}
