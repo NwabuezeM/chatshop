@@ -3,105 +3,210 @@
 /**
  * Payment Gateway Interface
  *
+ * Defines the contract that all payment gateways must implement.
+ * This interface ensures consistency across all payment gateway implementations.
+ *
  * @package ChatShop
- * @subpackage Includes/Abstracts
+ * @subpackage Payment\Interfaces
  * @since 1.0.0
  */
 
-namespace ChatShop\Includes\Abstracts;
+namespace ChatShop\Payment\Interfaces;
 
 // Prevent direct access
-defined('ABSPATH') || exit;
+if (!defined('ABSPATH')) {
+    exit;
+}
 
 /**
- * Interface ChatShop_Payment_Gateway_Interface
- *
- * Defines the contract for all payment gateway implementations
- *
- * @since 1.0.0
+ * ChatShop Payment Gateway Interface
+ * 
+ * Contract for all payment gateway implementations
  */
 interface ChatShop_Payment_Gateway_Interface
 {
 
     /**
-     * Process a payment
+     * Process payment
      *
-     * @param float  $amount       Payment amount
-     * @param string $currency     Currency code (e.g., 'USD', 'NGN')
-     * @param array  $customer_data Customer information
-     * @param array  $order_data   Order details
-     * @return array               Payment result with status and transaction details
+     * @param float $amount Payment amount
+     * @param string $currency Currency code
+     * @param array $customer_data Customer information
+     * @param array $order_data Order information
+     * @return array|WP_Error Payment response
      */
-    public function process_payment($amount, $currency, $customer_data, $order_data = array());
+    public function process_payment($amount, $currency, $customer_data, $order_data = []);
 
     /**
-     * Verify a transaction
+     * Verify transaction
      *
-     * @param string $transaction_id Transaction reference
-     * @return array                 Verification result
+     * @param string $transaction_id Transaction ID
+     * @return array|WP_Error Verification response
      */
     public function verify_transaction($transaction_id);
 
     /**
-     * Handle webhook notifications
+     * Handle webhook
      *
      * @param array $payload Webhook payload
-     * @return array         Processing result
+     * @return array|WP_Error Webhook response
      */
     public function handle_webhook($payload);
 
     /**
-     * Generate payment link
-     *
-     * @param float  $amount      Payment amount
-     * @param string $currency    Currency code
-     * @param array  $metadata    Additional payment metadata
-     * @return string|false       Payment link URL or false on failure
-     */
-    public function generate_payment_link($amount, $currency, $metadata = array());
-
-    /**
      * Process refund
      *
-     * @param string $transaction_id Transaction to refund
-     * @param float  $amount        Amount to refund (null for full refund)
-     * @param string $reason        Refund reason
-     * @return array                Refund result
+     * @param string $transaction_id Original transaction ID
+     * @param float $amount Refund amount
+     * @param string $reason Refund reason
+     * @return array|WP_Error Refund response
      */
-    public function process_refund($transaction_id, $amount = null, $reason = '');
-
-    /**
-     * Get gateway information
-     *
-     * @return array Gateway details (id, name, description, supported currencies, etc.)
-     */
-    public function get_gateway_info();
-
-    /**
-     * Check if gateway is available
-     *
-     * @return bool True if gateway can process payments
-     */
-    public function is_available();
+    public function process_refund($transaction_id, $amount, $reason = '');
 
     /**
      * Get supported currencies
      *
-     * @return array List of supported currency codes
+     * @return array Array of supported currency codes
      */
     public function get_supported_currencies();
 
     /**
-     * Get supported features
+     * Get supported countries
      *
-     * @return array List of supported features (refunds, recurring, etc.)
+     * @return array Array of supported country codes
      */
-    public function get_supported_features();
+    public function get_supported_countries();
+
+    /**
+     * Check if gateway supports feature
+     *
+     * @param string $feature Feature name
+     * @return bool
+     */
+    public function supports($feature);
+
+    /**
+     * Get gateway configuration
+     *
+     * @return array Gateway configuration
+     */
+    public function get_configuration();
 
     /**
      * Validate gateway configuration
      *
-     * @return bool|WP_Error True if valid, WP_Error on validation failure
+     * @return bool|WP_Error
      */
     public function validate_configuration();
+
+    /**
+     * Get payment methods
+     *
+     * @return array Available payment methods
+     */
+    public function get_payment_methods();
+
+    /**
+     * Create payment link
+     *
+     * @param array $payment_data Payment information
+     * @return array|WP_Error Payment link response
+     */
+    public function create_payment_link($payment_data);
+
+    /**
+     * Cancel payment
+     *
+     * @param string $transaction_id Transaction ID
+     * @return array|WP_Error Cancellation response
+     */
+    public function cancel_payment($transaction_id);
+
+    /**
+     * Get transaction details
+     *
+     * @param string $transaction_id Transaction ID
+     * @return array|WP_Error Transaction details
+     */
+    public function get_transaction_details($transaction_id);
+
+    /**
+     * Test gateway connection
+     *
+     * @return bool|WP_Error
+     */
+    public function test_connection();
+
+    /**
+     * Get gateway status
+     *
+     * @return array Gateway status information
+     */
+    public function get_gateway_status();
+
+    /**
+     * Initialize gateway
+     *
+     * @return void
+     */
+    public function init();
+
+    /**
+     * Get gateway fees
+     *
+     * @param float $amount Transaction amount
+     * @param string $currency Currency code
+     * @return array Fee information
+     */
+    public function get_fees($amount, $currency);
+
+    /**
+     * Format amount for gateway
+     *
+     * @param float $amount Amount to format
+     * @param string $currency Currency code
+     * @return string|int Formatted amount
+     */
+    public function format_amount($amount, $currency);
+
+    /**
+     * Get minimum amount
+     *
+     * @param string $currency Currency code
+     * @return float Minimum amount
+     */
+    public function get_minimum_amount($currency);
+
+    /**
+     * Get maximum amount
+     *
+     * @param string $currency Currency code
+     * @return float Maximum amount
+     */
+    public function get_maximum_amount($currency);
+
+    /**
+     * Validate amount
+     *
+     * @param float $amount Amount to validate
+     * @param string $currency Currency code
+     * @return bool|WP_Error
+     */
+    public function validate_amount($amount, $currency);
+
+    /**
+     * Get webhook URL
+     *
+     * @return string Webhook URL
+     */
+    public function get_webhook_url();
+
+    /**
+     * Validate webhook signature
+     *
+     * @param string $payload Webhook payload
+     * @param string $signature Webhook signature
+     * @return bool
+     */
+    public function validate_webhook_signature($payload, $signature);
 }
